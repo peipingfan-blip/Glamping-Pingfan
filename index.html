@@ -12,6 +12,9 @@
     <!-- 2. 引入 FontAwesome 图标库 (用于红心、评分星星等图标) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
+    <!-- 3. 引入 Supabase 官方 JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
     <style>
         /* 基础样式：全屏撑满，隐藏滚动条 */
         html, body {
@@ -222,7 +225,16 @@
 
     <script>
         // ==========================================
-        // 1. 地图初始化（限制缩放和边界，确保左右闭合）
+        // 1. 初始化 Supabase 连接（使用专属配置与防冲突变量名）
+        // ==========================================
+        const SUPABASE_URL = "https://hfqyhqdwoojaifhgeegs.supabase.co";
+        const SUPABASE_KEY = "sb_publishable_11x6y1H61cwFKe5vKcB8EA__IR-113I";
+        
+        // 核心修复：重命名为 supabaseClient 避免本地运行环境下与库名发生命名冲突
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // ==========================================
+        // 2. 地图初始化（限制缩放和边界）
         // ==========================================
         const corner1 = L.latLng(-85, -180);
         const corner2 = L.latLng(85, 180);
@@ -230,33 +242,51 @@
 
         const map = L.map('map-container', {
             maxBounds: worldBounds,
-            maxBoundsViscosity: 1.0,  // 边界完全卡死，拖不出世界
-            minZoom: 3,               // 限制最小缩放，防止大面积留白
-            zoomControl: false        // 隐藏默认缩放控制，保证界面纯净
-        }).setView([34.0, 108.0], 3); // 默认定位中国中心
+            maxBoundsViscosity: 1.0,
+            minZoom: 3,
+            zoomControl: false
+        }).setView([34.0, 108.0], 3); // 默认定位
 
-        // 加载高质感的高德卡其色地图
-        L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
-            subdomains: ["1", "2", "3", "4"],
-            noWrap: true              // 关键：彻底禁止地图左右横向平铺复制
+        // 核心修复：更换为极高质感的 CartoDB 复古沙滩色底图，不限本地协议（file:///），保障本地极速加载
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd',
+            maxZoom: 20,
+            noWrap: true
         }).addTo(map);
 
         // ==========================================
-        // 2. 状态管理与数据缓存 (LocalStorage)
+        // 3. 状态管理与数据缓存
         // ==========================================
-        let isAddingMode = false; // 是否处于“新增放置”状态
-        let activeMarker = null;  // 临时放置在地图上的大头针
-
-        // 从本地浏览器加载已有数据，若无则初始化为空
-        let hotels = JSON.parse(localStorage.getItem('my_glamping_hotels')) || [];
+        let isAddingMode = false;
+        let activeMarker = null;
+        let hotels = []; // 云端拉取的数据
 
         // ==========================================
-        // 3. 渲染地图上的已有大头针及气泡框
+        // 4. 从云端 Supabase 数据库实时拉取标记数据
         // ==========================================
-        function loadSavedMarkers() {
-            hotels.forEach(hotel => {
-                createHotelMarkerOnMap(hotel);
-            });
+        async function loadSavedMarkers() {
+            try {
+                const { data, error } = await supabaseClient
+                    .from('hotels')
+                    .select('*');
+
+                if (error) throw error;
+
+                hotels = data || [];
+                
+                // 清理地图上旧的图层，重新绘制
+                map.eachLayer((layer) => {
+                    if (layer instanceof L.Marker && layer !== activeMarker) {
+                        map.removeLayer(layer);
+                    }
+                });
+
+                hotels.forEach(hotel => {
+                    createHotelMarkerOnMap(hotel);
+                });
+            } catch (err) {
+                console.error("从云端加载数据失败: ", err.message);
+            }
         }
 
         function createHotelMarkerOnMap(hotel) {
@@ -264,9 +294,8 @@
             
             // 动态重新计算总评价得分
             const totalScore = hotel.reviews.reduce((sum, r) => sum + r.rating, 0);
-            const avgScore = (totalScore / hotel.reviews.length).toFixed(1);
+            const avgScore = hotel.reviews.length > 0 ? (totalScore / hotel.reviews.length).toFixed(1) : "N/A";
 
-            // 动态生成气泡内的 HTML
             const getPopupHTML = () => {
                 let reviewsHTML = '';
                 hotel.reviews.forEach((r, idx) => {
@@ -290,21 +319,19 @@
                     <div class="custom-form">
                         <div style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
                             <h3 style="margin:0;">${hotel.name}</h3>
-                            <button onclick="toggleWishlist('${hotel.id}')" style="background: none; border: none; cursor: pointer; color: ${hotel.isWishlist ? '#d9534f' : '#ccc'}; font-size: 16px;">
-                                <i class="${hotel.isWishlist ? 'fa-solid' : 'fa-regular'} fa-heart"></i>
+                            <button onclick="toggleWishlist('${hotel.id}')" style="background: none; border: none; cursor: pointer; color: ${hotel.is_wishlist ? '#d9534f' : '#ccc'}; font-size: 16px;">
+                                <i class="${hotel.is_wishlist ? 'fa-solid' : 'fa-regular'} fa-heart"></i>
                             </button>
                         </div>
                         <p style="font-size: 11px; color: #888; margin: 4px 0 10px 0;">
-                            📍 ${hotel.region} · ${hotel.landscape || '🌲 秘境'} · 综合评分：<strong style="color: #f39c12;">★ ${avgScore}</strong> (${hotel.reviews.length}条评体验)
+                            📍 ${hotel.region} · ${hotel.landscape || '🌲 秘境'} · 综合评分：<strong style="color: #f39c12;">★ ${avgScore}</strong> (${hotel.reviews.length}条评价)
                         </p>
                         
-                        <!-- 历史评论盖楼区 -->
                         <div style="background: #f9f9f9; padding: 8px; border-radius: 6px; margin-bottom: 10px; max-height: 140px; overflow-y: auto; border: 1px solid #f0f0f0;">
                             <label style="font-size: 11px; font-weight: bold; color: #444; display: block; margin-bottom: 4px;">过往入住感受：</label>
                             ${reviewsHTML}
                         </div>
 
-                        <!-- 后来者追评盖楼 -->
                         <div style="border-top: 1px solid #eee; padding-top: 8px;">
                             <strong style="font-size: 11px; color: #2D4B34; display: block; margin-bottom: 6px;">续写我的入住体验：</strong>
                             <div class="form-group">
@@ -335,7 +362,7 @@
         }
 
         // ==========================================
-        // 4. “新增目的地” 交互控制
+        // 5. “新增目的地” 交互控制
         // ==========================================
         const addBtn = document.getElementById('add-btn');
         const mapInstruction = document.getElementById('map-instruction');
@@ -345,13 +372,11 @@
             isAddingMode = !isAddingMode;
 
             if (isAddingMode) {
-                // 进入放置及输入模式
                 addBtn.innerHTML = '<i class="fa-solid fa-xmark"></i> 取消放置';
                 addBtn.classList.add('active');
                 mapInstruction.style.display = 'block';
                 mapContainerEl.classList.add('crosshair-cursor-active');
             } else {
-                // 退出并重置
                 resetAddingMode();
             }
         });
@@ -369,15 +394,12 @@
             }
         }
 
-        // 鼠标在地图上点击落子
         map.on('click', (e) => {
             if (!isAddingMode) return;
-
             const { lat, lng } = e.latlng;
             openBuilderFormAtLatLng(lat, lng);
         });
 
-        // 唤起新建表单
         function openBuilderFormAtLatLng(lat, lng) {
             const targetLatLng = L.latLng(lat, lng);
 
@@ -439,7 +461,7 @@
                         <label>上传头图照片</label>
                         <input type="file" id="new-hotel-photo" accept="image/*">
                     </div>
-                    <button class="submit-btn" onclick="saveNewHotel(${lat}, ${lng})">保存目的地</button>
+                    <button class="submit-btn" id="save-hotel-btn" onclick="saveNewHotel(${lat}, ${lng})">保存目的地</button>
                 </div>
             `;
 
@@ -447,7 +469,7 @@
         }
 
         // ==========================================
-        // 5. 评分星级点击交互
+        // 6. 评分星级点击交互
         // ==========================================
         let currentNewRating = 5; 
         function setNewRating(val) {
@@ -476,30 +498,65 @@
             });
         }
 
+        // 压缩图片防止体积太大撑爆数据库
+        function compressImage(file, maxWidth = 600) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const scale = maxWidth / img.width;
+                        if(img.width > maxWidth) {
+                            canvas.width = maxWidth;
+                            canvas.height = img.height * scale;
+                        } else {
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                        }
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.7)); // 0.7 压缩质量
+                    };
+                };
+            });
+        }
+
         // ==========================================
-        // 6. 核心逻辑：保存新创建的酒店（首建者）
+        // 7. 核心保存逻辑：写入云端 Supabase 数据库
         // ==========================================
-        function saveNewHotel(lat, lng) {
+        async function saveNewHotel(lat, lng) {
             const name = document.getElementById('new-hotel-name').value.trim();
             const region = document.getElementById('new-hotel-region').value;
-            const landscape = document.getElementById('new-hotel-landscape').value; // 获取新加入的地貌值
+            const landscape = document.getElementById('new-hotel-landscape').value;
             const desc = document.getElementById('new-hotel-desc').value.trim();
             const fileInput = document.getElementById('new-hotel-photo');
+            const saveBtn = document.getElementById('save-hotel-btn');
 
             if (!name || !desc) {
                 alert('请填写完整的酒店名称和您的首建评测体验！');
                 return;
             }
 
-            const executeSave = (photoBase64 = null) => {
+            saveBtn.disabled = true;
+            saveBtn.innerText = "正在云端同步中...";
+
+            try {
+                let photoBase64 = null;
+                if (fileInput.files && fileInput.files[0]) {
+                    photoBase64 = await compressImage(fileInput.files[0]);
+                }
+
                 const newHotel = {
                     id: 'hotel_' + Date.now(),
                     name: name,
                     region: region,
-                    landscape: landscape, // 存入数据对象
+                    landscape: landscape,
                     lat: lat,
                     lng: lng,
-                    isWishlist: false,
+                    is_wishlist: false,
                     reviews: [
                         {
                             rating: currentNewRating,
@@ -509,29 +566,28 @@
                     ]
                 };
 
-                hotels.push(newHotel);
-                localStorage.setItem('my_glamping_hotels', JSON.stringify(hotels));
+                // 向 Supabase 数据库插入一行新数据
+                const { error } = await supabaseClient
+                    .from('hotels')
+                    .insert([newHotel]);
 
-                createHotelMarkerOnMap(newHotel);
+                if (error) throw error;
+
+                alert('🎉 成功创建！新目的地已同步至云端。');
                 resetAddingMode();
-            };
-
-            // 转换本地照片为 Base64 存储
-            if (fileInput.files && fileInput.files[0]) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    executeSave(e.target.result);
-                };
-                reader.readAsDataURL(fileInput.files[0]);
-            } else {
-                executeSave();
+                await loadSavedMarkers(); // 重新拉取最新数据
+            } catch (err) {
+                alert('云端保存失败: ' + err.message);
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerText = "保存目的地";
             }
         }
 
         // ==========================================
-        // 7. 核心逻辑：后来者追评盖楼
+        // 8. 后来者云端追评盖楼
         // ==========================================
-        window.submitNewReview = function(hotelId) {
+        window.submitNewReview = async function(hotelId) {
             const hotel = hotels.find(h => h.id === hotelId);
             if (!hotel) return;
 
@@ -543,55 +599,66 @@
                 return;
             }
 
-            const executeReviewSave = (photoBase64 = null) => {
+            try {
+                let photoBase64 = null;
+                if (fileInput.files && fileInput.files[0]) {
+                    photoBase64 = await compressImage(fileInput.files[0]);
+                }
+
                 const newReview = {
                     rating: currentPopRating,
                     comment: comment,
                     photo: photoBase64
                 };
 
-                hotel.reviews.push(newReview);
-                localStorage.setItem('my_glamping_hotels', JSON.stringify(hotels));
+                // 将追评追加进原数组
+                const updatedReviews = [...hotel.reviews, newReview];
 
-                alert('感谢您的精彩追评，体验成功“盖楼”！');
-                
+                const { error } = await supabaseClient
+                    .from('hotels')
+                    .update({ reviews: updatedReviews })
+                    .eq('id', hotelId);
+
+                if (error) throw error;
+
+                alert('🔥 追评成功！所有人都可以看到你的体验了。');
                 map.closePopup();
-                location.reload(); // 自动重新加载，实时获取本地缓存的最新评分
-            };
-
-            if (fileInput.files && fileInput.files[0]) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    executeReviewSave(e.target.result);
-                };
-                reader.readAsDataURL(fileInput.files[0]);
-            } else {
-                executeReviewSave();
+                await loadSavedMarkers();
+            } catch (err) {
+                alert('追评失败: ' + err.message);
             }
         }
 
         // ==========================================
-        // 8. 核心逻辑：一键添加/移除心愿单
+        // 9. 一键收藏心愿单
         // ==========================================
-        window.toggleWishlist = function(hotelId) {
+        window.toggleWishlist = async function(hotelId) {
             const hotel = hotels.find(h => h.id === hotelId);
             if (!hotel) return;
 
-            hotel.isWishlist = !hotel.isWishlist;
-            localStorage.setItem('my_glamping_hotels', JSON.stringify(hotels));
+            const nextWishlistState = !hotel.is_wishlist;
 
-            alert(hotel.isWishlist ? '成功添加到您的心愿单！❤️' : '已从心愿单移除');
-            map.closePopup();
-            location.reload();
+            try {
+                const { error } = await supabaseClient
+                    .from('hotels')
+                    .update({ is_wishlist: nextWishlistState })
+                    .eq('id', hotelId);
+
+                if (error) throw error;
+
+                alert(nextWishlistState ? '成功添加到您的心愿单！❤️' : '已从心愿单移除');
+                map.closePopup();
+                await loadSavedMarkers();
+            } catch (err) {
+                alert('心愿单操作失败: ' + err.message);
+            }
         }
 
         // ==========================================
-        // 9. 特色度分秒 (DMS) 坐标转换与智能定位解析
+        // 10. DMS (度分秒) 坐标智能定位
         // ==========================================
         function parseCoordinatePart(part, isLatitude) {
             part = part.trim().toUpperCase();
-            
-            // 完美匹配格式：度.分.秒+方向。例如 30.23.19N、5.50.35W 等
             const dmsRegex = /^(\d+)\.(\d+)\.(\d+)([NSEW])$/;
             const match = part.match(dmsRegex);
             
@@ -601,25 +668,16 @@
                 const s = parseFloat(match[3]);
                 const dir = match[4];
                 
-                if (isLatitude && (dir !== 'N' && dir !== 'S')) {
-                    throw new Error("纬度方向符号错误！必须是 N 或 S。");
-                }
-                if (!isLatitude && (dir !== 'E' && dir !== 'W')) {
-                    throw new Error("经度方向符号错误！必须是 E 或 W。");
-                }
+                if (isLatitude && (dir !== 'N' && dir !== 'S')) throw new Error("纬度方向符号错误！");
+                if (!isLatitude && (dir !== 'E' && dir !== 'W')) throw new Error("经度方向符号错误！");
                 
                 let dd = d + (m / 60) + (s / 3600);
-                if (dir === 'S' || dir === 'W') {
-                    dd = -dd; // 南纬和西经转为负数
-                }
+                if (dir === 'S' || dir === 'W') dd = -dd;
                 return dd;
             }
             
-            // 兼容普通的十进制纯数字格式
             const ddVal = parseFloat(part);
-            if (isNaN(ddVal)) {
-                throw new Error("格式无法自动识别。请检查输入！");
-            }
+            if (isNaN(ddVal)) throw new Error("格式无法自动识别。");
             return ddVal;
         }
 
@@ -630,12 +688,11 @@
                 return;
             }
 
-            // 清除首尾可能包含的各种中英文括号 () （）
             coordInput = coordInput.replace(/^[\(\uff08]/, '').replace(/[\)\uff09]$/, '');
 
             const parts = coordInput.replace('，', ',').split(',');
             if (parts.length !== 2) {
-                alert('坐标格式不正确！\n请输入如：30.23.19N, 5.50.35W\n或直接输入十进制：26.87, 100.23');
+                alert('格式不正确！请输入如：30.23.19N, 5.50.35W');
                 return;
             }
 
@@ -644,80 +701,14 @@
                 const lng = parseCoordinatePart(parts[1], false);
 
                 if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-                    alert('经纬度超出地球最大范围！\n纬度需在 -90 到 90 之间，经度需在 -180 到 180 之间。');
+                    alert('经纬度超出地球范围！');
                     return;
                 }
 
-                // 地图平稳滑行飞向目标区域
                 map.flyTo([lat, lng], 10, { animate: true, duration: 1.5 });
 
-                // 在滑行飞行动画结束后，自动打开带有“地貌特征选择”的新建卡片
                 setTimeout(() => {
-                    const targetLatLng = L.latLng(lat, lng);
-
-                    if (activeMarker) {
-                        activeMarker.setLatLng(targetLatLng);
-                    } else {
-                        activeMarker = L.marker(targetLatLng).addTo(map);
-                    }
-
-                    const firstBuilderForm = `
-                        <div class="custom-form">
-                            <h3>创建新的野奢目的地</h3>
-                            <div style="font-size: 10px; color: #888; margin-bottom: 8px;">
-                                坐标: [ ${lat.toFixed(4)}, ${lng.toFixed(4)} ]
-                            </div>
-                            <div class="form-group">
-                                <label>酒店名称 *</label>
-                                <input type="text" id="new-hotel-name" placeholder="如：极地之光营地" required>
-                            </div>
-                            <div class="form-group">
-                                <label>所在地区 *</label>
-                                <select id="new-hotel-region">
-                                    <option value="东亚">东亚</option>
-                                    <option value="东南亚">东南亚</option>
-                                    <option value="北美洲">北美洲</option>
-                                    <option value="欧洲">欧洲</option>
-                                    <option value="非洲">非洲</option>
-                                    <option value="其他">其他</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>地貌特征 *</label>
-                                <select id="new-hotel-landscape">
-                                    <option value="🌵 沙漠">🌵 沙漠</option>
-                                    <option value="⛰️ 悬崖山谷">⛰️ 悬崖山谷</option>
-                                    <option value="🌴 热带雨林">🌴 热带雨林</option>
-                                    <option value="❄️ 极地冰川">❄️ 极地冰川</option>
-                                    <option value="🌊 戈壁荒漠">🌊 戈壁荒漠</option>
-                                    <option value="🏖️ 海岛秘境">🏖️ 海岛秘境</option>
-                                    <option value="🪵 原始森林">🪵 原始森林</option>
-                                    <option value="🌾 高原草原">🌾 高原草原</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>我的评分</label>
-                                <div class="star-rating" id="new-hotel-stars">
-                                    <i class="fa-solid fa-star active" data-val="1" onclick="setNewRating(1)"></i>
-                                    <i class="fa-solid fa-star active" data-val="2" onclick="setNewRating(2)"></i>
-                                    <i class="fa-solid fa-star active" data-val="3" onclick="setNewRating(3)"></i>
-                                    <i class="fa-solid fa-star active" data-val="4" onclick="setNewRating(4)"></i>
-                                    <i class="fa-solid fa-star active" data-val="5" onclick="setNewRating(5)"></i>
-                                </div>
-                            </div>
-                            <div class="form-group">
-                                <label>首建体验评测 *</label>
-                                <textarea id="new-hotel-desc" rows="3" placeholder="写下你的第一手入住真实体验..."></textarea>
-                            </div>
-                            <div class="form-group">
-                                <label>上传头图照片</label>
-                                <input type="file" id="new-hotel-photo" accept="image/*">
-                            </div>
-                            <button class="submit-btn" onclick="saveNewHotel(${lat}, ${lng})">保存目的地</button>
-                        </div>
-                    `;
-
-                    activeMarker.bindPopup(firstBuilderForm).openPopup();
+                    openBuilderFormAtLatLng(lat, lng);
                 }, 1600);
 
             } catch (err) {
@@ -726,7 +717,7 @@
         };
 
         // ==========================================
-        // 10. 初始化加载已保存的大头针
+        // 11. 初始化加载
         // ==========================================
         loadSavedMarkers();
 
