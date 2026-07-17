@@ -208,15 +208,39 @@
             return `${SUPABASE_URL}/storage/v1/object/public/hotel-photos/${fileName}`;
         }
 
-        function getMode(array) {
-            if (!array || array.length === 0) return null;
-            const modeMap = {}; let maxEl = array[0], maxCount = 1;
-            for (let i = array.length - 1; i >= 0; i--) {
-                const el = array[i]; modeMap[el] = (modeMap[el] || 0) + 1;
-                if (modeMap[el] > maxCount) { maxEl = el; maxCount = modeMap[el]; }
-            }
-            return maxEl;
+       function getMode(arr) {
+    if (!arr || arr.length === 0) return null;
+    
+    // 1. 统计每个选项出现的次数
+    const modeMap = {};
+    let maxCount = 0;
+    for (let i = 0; i < arr.length; i++) {
+        const el = arr[i];
+        if (el === undefined || el === null || el === '') continue;
+        modeMap[el] = (modeMap[el] || 0) + 1;
+        if (modeMap[el] > maxCount) {
+            maxCount = modeMap[el];
         }
+    }
+    
+    if (maxCount === 0) return null;
+    
+    // 2. 找出所有获得最大票数的候选者
+    const candidates = Object.keys(modeMap).filter(el => modeMap[el] === maxCount);
+    
+    // 3. 定义评级权重，用于打平时高评级优先。非S/A/B/C字符权重设为0
+    const gradeWeights = { 'S': 4, 'A': 3, 'B': 2, 'C': 1 };
+    
+    // 4. 排序：权重高的排在最前面
+    candidates.sort((a, b) => {
+        const weightA = gradeWeights[a] || 0;
+        const weightB = gradeWeights[b] || 0;
+        return weightB - weightA;
+    });
+    
+    // 返回权重最高的那一个（即高评级优先）
+    return candidates[0];
+}
 
         function calculateHotelConsensus(reviews) {
             if (!reviews || reviews.length === 0) return { avgRating: "暂无", reviewCount: 0, wildness: '-', privacy: '-', luxury: '-', bestSeason: '暂无推荐' };
@@ -319,10 +343,26 @@
                             </select>
                         </div>
                         <div style="display:flex; gap:4px; margin-bottom:6px;">
-                            <select id="review-wildness" style="flex:1;"><option value="A">野性 A</option><option value="S">野性 S</option><option value="B">野性 B</option></select>
-                            <select id="review-privacy" style="flex:1;"><option value="A">隐秘 A</option><option value="S">隐秘 S</option><option value="B">隐秘 B</option></select>
-                            <select id="review-luxury" style="flex:1;"><option value="A">奢华 A</option><option value="S">奢华 S</option><option value="B">奢华 B</option></select>
-                        </div>
+                          <div style="display:flex; gap:4px; margin-bottom:6px;">
+    <select id="review-wildness" style="flex:1;">
+        <option value="S">野性 S</option>
+        <option value="A">野性 A</option>
+        <option value="B">野性 B</option>
+        <option value="C">野性 C</option>
+    </select>
+    <select id="review-privacy" style="flex:1;">
+        <option value="S">隐秘 S</option>
+        <option value="A">隐秘 A</option>
+        <option value="B">隐秘 B</option>
+        <option value="C">隐秘 C</option>
+    </select>
+    <select id="review-luxury" style="flex:1;">
+        <option value="S">奢华 S</option>
+        <option value="A">奢华 A</option>
+        <option value="B">奢华 B</option>
+        <option value="C">奢华 C</option>
+    </select>
+</div>
                         <textarea id="review-comment" required placeholder="分享宿夜记忆..." style="width:100%; height:40px; resize:none; margin-bottom:6px; box-sizing:border-box;"></textarea>
                         
                         <!-- 核心组件：支持至多3张的体验图选框 -->
